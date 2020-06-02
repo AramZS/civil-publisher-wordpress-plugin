@@ -25,7 +25,9 @@ function enqueue_post_panel() {
 
 	common_scripts( 'civil-publisher-post-panel' );
 }
-add_action( 'enqueue_block_editor_assets', __NAMESPACE__ . '\enqueue_post_panel' );
+if ( is_manager_enabled() ) {
+	add_action( 'enqueue_block_editor_assets', __NAMESPACE__ . '\enqueue_post_panel' );
+}
 
 /**
  * Add Civil admin menu and sub-menu items.
@@ -42,11 +44,11 @@ function add_menus() {
 
 	add_submenu_page(
 		TOP_LEVEL_MENU,
-		__( 'Newsroom Manager', 'civil' ),
-		__( 'Newsroom Manager', 'civil' ),
-		'manage_options',
-		MANAGEMENT_PAGE,
-		__NAMESPACE__ . '\newsroom_manager_content'
+		__( 'Story Boosts', 'civil' ),
+		__( 'Story Boosts', 'civil' ),
+		'edit_posts',
+		STORY_BOOSTS_SETTINGS,
+		__NAMESPACE__ . '\story_boosts_settings_content'
 	);
 
 	if ( apply_filters( 'civil_enable_credibility_indicators', true ) ) {
@@ -54,9 +56,20 @@ function add_menus() {
 			TOP_LEVEL_MENU,
 			__( 'Credibility Indicators', 'civil' ),
 			__( 'Credibility Indicators', 'civil' ),
-			'manage_options',
+			'edit_posts',
 			CREDIBILITY_INDICATORS,
 			__NAMESPACE__ . '\credibililty_indicators_content'
+		);
+	}
+
+	if ( is_manager_enabled() ) {
+		add_submenu_page(
+			TOP_LEVEL_MENU,
+			__( 'Newsroom Manager', 'civil' ),
+			__( 'Newsroom Manager', 'civil' ),
+			'manage_options',
+			MANAGEMENT_PAGE,
+			__NAMESPACE__ . '\newsroom_manager_content'
 		);
 	}
 
@@ -69,12 +82,14 @@ add_action( 'admin_menu', __NAMESPACE__ . '\add_menus' );
  * Add FAQ link to plugin menu.
  */
 function add_faq_link() {
-	// phpcs:disable WordPress.WP.GlobalVariablesOverride.OverrideProhibited -- can't find any other way to get external link submenu except redirect headers or crazy url filter shit
+	// phpcs:disable WordPress.WP.GlobalVariablesOverride.Prohibited -- can't find any other way to get external link submenu except redirect headers or crazy url filter shit
 	global $submenu;
-	$submenu[ TOP_LEVEL_MENU ][] = array( 'Help 🡭', 'edit_posts', 'https://cvlconsensys.zendesk.com/hc/en-us/categories/360001000232-Journalists' );
+	$submenu[ TOP_LEVEL_MENU ][] = array( 'Manager Help 🡭', 'edit_posts', FAQ_HOME );
 	// phpcs:enable
 }
-add_action( 'admin_menu', __NAMESPACE__ . '\add_faq_link' );
+if ( is_manager_enabled() ) {
+	add_action( 'admin_menu', __NAMESPACE__ . '\add_faq_link' );
+}
 
 /**
  * Civil Newsroom Manager page content.
@@ -107,12 +122,16 @@ function help_menu_content() {
 }
 
 /**
+ * Story Boosts Settings content.
+ */
+function story_boosts_settings_content() {
+	require_once dirname( __FILE__ ) . '/story-boosts-settings.php';
+}
+
+/**
  * Credibiity Indicators content.
  */
 function credibililty_indicators_content() {
-	if ( ! current_user_can( 'manage_options' ) ) {
-		wp_die( esc_html__( 'You do not have sufficient permissions to access this page.', 'civil' ) );
-	}
 	require_once dirname( __FILE__ ) . '/credibililty-indicators.php';
 }
 
@@ -149,47 +168,68 @@ function content_viewer_script() {
 add_action( 'admin_print_scripts-civil_page_' . CONTENT_VIEWER, __NAMESPACE__ . '\content_viewer_script' );
 
 /**
- * Alert user that Gutenberg plugin is needed if they don't have it activated.
+ * Alert user that Gutenberg plugin is needed if they don't have it activated. Only show on Manager page though so we don't drive them crazy if they mostly use the classic editor.
  */
 function gutenberg_nag() {
-	if ( is_plugin_active( 'gutenberg/gutenberg.php' ) || version_compare( get_bloginfo( 'version' ), '5.0', '>=' ) ) {
+	$page_id = get_current_screen()->id ?? '';
+	if ( 'civil_page_' . MANAGEMENT_PAGE !== $page_id
+		|| is_gutenberg_enabled()
+	) {
 		return;
+	}
+
+	if ( is_gutenberg_disabled_by_classic_editor() ) {
+		$title = __( 'Gutenberg plugin disabled', 'civil' );
+		$body = sprintf(
+			wp_kses(
+				/* translators: 1: Gutenberg plugin demo URL, 2: Classic Editor settings URL */
+				__( 'The Civil Publisher requires WordPress\'s official <a target="_blank" href="%1$s">Gutenberg editor</a> to be active. You currently have Gutenberg disabled via the Classic Editor plugin. Please <a href="%2$s">visit Classic Editor settings</a> and set the default editor to the "Block Editor" in order to continue.', 'civil' ),
+				array(
+					'a' => array(
+						'href' => array(),
+						'target' => array(),
+					),
+				)
+			),
+			esc_url( 'https://wordpress.org/gutenberg/' ),
+			esc_url( admin_url( '/options-writing.php#classic-editor-options' ) )
+		);
+	} else {
+		$title = __( 'Gutenberg plugin missing', 'civil' );
+		$body = sprintf(
+			wp_kses(
+				/* translators: 1: Gutenberg plugin demo URL, 2: Install Gutenberg plugin URL */
+				__( 'The Civil Publisher requires WordPress\'s official <a target="_blank" href="%1$s">Gutenberg editor</a> to be installed and activated. Please either <a target="_blank" href="%2$s">install the Gutenberg plugin</a> or upgrade WordPress to the latest version, which includes Gutenberg by default.', 'civil' ),
+				array(
+					'a' => array(
+						'href' => array(),
+						'target' => array(),
+					),
+				)
+			),
+			esc_url( 'https://wordpress.org/gutenberg/' ),
+			esc_url( admin_url( '/plugin-install.php?tab=plugin-information&plugin=gutenberg' ) )
+		);
 	}
 
 	civil_notice_open();
 	?>
-	<h3><?php esc_html_e( 'Gutenberg plugin missing', 'civil' ); ?></h3>
-	<p>
-	<?php
-		echo sprintf(
-			wp_kses(
-				/* translators: 1: Install Guteenberg plugin URL */
-				__( 'The Civil Publisher requires WordPress\'s official <a target="_blank" href="%1$s">Gutenberg plugin</a> to be installed and activated.', 'civil' ),
-				[
-					'a' => [
-						'href' => [],
-						'target' => [],
-					],
-				]
-			),
-			esc_url( admin_url( '/plugin-install.php?tab=plugin-information&plugin=gutenberg' ) )
-		);
-	?>
-	</p>
+	<h3><?php echo esc_html( $title ); ?></h3>
+	<p><?php echo esc_html( $body ); ?></p>
 	<?php
 	civil_notice_close();
 }
-add_action( 'admin_notices', __NAMESPACE__ . '\gutenberg_nag' );
+if ( is_manager_enabled() ) {
+	add_action( 'admin_notices', __NAMESPACE__ . '\gutenberg_nag' );
+}
 
 /**
  * If necessary, alert user that they need to set up newsroom to use plugin.
  */
 function newsroom_setup_nag() {
-	// Don't show on newsroom manager page or if missing Gutenberg.
+	// Don't show on newsroom manager page.
 	$page_id = get_current_screen()->id ?? '';
-	if ( 'civil_page_' . MANAGEMENT_PAGE === $page_id
-		|| ! is_plugin_active( 'gutenberg/gutenberg.php' )
-	) {
+	if ( 'civil_page_' . MANAGEMENT_PAGE === $page_id ) {
 		return;
 	}
 
@@ -204,7 +244,7 @@ function newsroom_setup_nag() {
 				wp_kses(
 					/* translators: 1: Management page URL */
 					__( 'Please take a few minutes to <a href="%1$s">set up your Civil newsroom</a> to start signing and publishing your posts.', 'civil' ),
-					[ 'a' => [ 'href' => [] ] ]
+					array( 'a' => array( 'href' => array() ) )
 				),
 				esc_url( $management_page_url )
 			);
@@ -218,17 +258,18 @@ function newsroom_setup_nag() {
 		civil_notice_close();
 	}
 }
-add_action( 'admin_notices', __NAMESPACE__ . '\newsroom_setup_nag' );
+if ( is_manager_enabled() ) {
+	add_action( 'admin_notices', __NAMESPACE__ . '\newsroom_setup_nag' );
+}
 
 /**
  * If necessary, alert user that they need to fill in their ETH wallet address.
  */
 function wallet_address_nag() {
-	// Don't show on newsroom manager page, or newsroom setup nag is showing, or if missing Gutenberg.
+	// Don't show on newsroom manager page, or if newsroom setup nag is showing.
 	$page_id = get_current_screen()->id ?? '';
 	if ( 'civil_page_' . MANAGEMENT_PAGE === $page_id
 		|| ( current_user_can( 'manage_options' ) && empty( get_option( NEWSROOM_ADDRESS_OPTION_KEY ) ) )
-		|| ! is_plugin_active( 'gutenberg/gutenberg.php' )
 	) {
 		return;
 	}
@@ -244,7 +285,7 @@ function wallet_address_nag() {
 				wp_kses(
 					/* translators: 1: Edit profile URL */
 					__( 'You need to <a href="%1$s">add your wallet address to your profile</a> before you can use your newsroom contract features.', 'civil' ),
-					[ 'a' => [ 'href' => [] ] ]
+					array( 'a' => array( 'href' => array() ) )
 				),
 				esc_url( $edit_profile_url )
 			);
@@ -258,7 +299,9 @@ function wallet_address_nag() {
 		civil_notice_close();
 	}
 }
-add_action( 'admin_notices', __NAMESPACE__ . '\wallet_address_nag' );
+if ( is_manager_enabled() ) {
+	add_action( 'admin_notices', __NAMESPACE__ . '\wallet_address_nag' );
+}
 
 /**
  * Output opening HTML for Civil admin notice.
@@ -292,7 +335,7 @@ function civil_notice_open() {
 			margin-left: 8px;
 		}
 	</style>
-	<div class="notice notice-error civil-notice">
+	<div class="notice notice-error civil-notice is-dismissible">
 		<div class="civil-logo-wrap">
 			<div class="civil-logo-wrap-inner">
 				<img src="<?php echo esc_url( plugins_url( 'images/civil-logo.svg', __FILE__ ) ); ?>" />
@@ -318,7 +361,7 @@ function civil_notice_close() {
 function help_menu_new_tab() {
 	?>
 	<script>
-		var submenu = document.querySelector(".toplevel_page_<?php echo esc_attr( 'TOP_LEVEL_MENU' ); ?> .wp-submenu a[href*=zendesk]");
+		var submenu = document.querySelector(".toplevel_page_<?php echo esc_attr( TOP_LEVEL_MENU ); ?> .wp-submenu a[href*='help.civil.co']");
 		submenu && submenu.setAttribute("target", "_blank");
 	</script>
 	<?php
